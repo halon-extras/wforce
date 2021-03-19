@@ -1,0 +1,141 @@
+class Wforce
+{
+	private $opts = [];
+
+	constructor($opts)
+	{
+		$this->opts["url"] = $opts["url"] ?? "";
+		$this->opts["port"] = number($opts["port"] ?? 8084);
+		$this->opts["opts"] = $opts["opts"] ?? [];
+
+		$this->opts["timeout"] = number($opts["timeout"] ?? 5);
+
+		$this->opts["username"] = $opts["username"] ?? "";
+		$this->opts["password"] = $opts["password"] ?? "";
+	}
+
+	private function api($uri, $post = none)
+	{
+		$url = $this->opts["url"].":".$this->opts["port"];
+		$basicauth = base64_encode($this->opts["username"].":".$this->opts["password"]);
+		$headers = [
+			"Content-Type: application/json",
+			"Authorization: Basic $basicauth"
+		];
+		if ($post)
+			$response = http($url.$uri, ["extended_result" => true, "headers" => $headers, "timeout" => $this->opts["timeout"]] + $this->opts["opts"], [], $post);
+		else
+			$response = http($url.$uri, ["extended_result" => true, "headers" => $headers, "timeout" => $this->opts["timeout"] + $this->opts["opts"]]);
+		return $response["content"];
+	}
+
+	function allow($wfuser)
+	{
+		$a["login"] = $wfuser->login;
+		$a["pwhash"] = $wfuser->pwhash;
+		$a["remote"] = $wfuser->remote;
+		$a += $wfuser->attrs;
+
+		$result = $this->api("/?command=allow", json_encode($a));
+		$result = json_decode($result ?? "");
+
+		if (isset($result["status"]))
+			return $result["status"];
+
+		return -1;
+	}
+
+	function report($wfuser, $authsuccess)
+	{
+		$a["login"] = $wfuser->login;
+		$a["pwhash"] = $wfuser->pwhash;
+		$a["remote"] = $wfuser->remote;
+		$a["success"] = $authsuccess;
+		$a += $wfuser->attrs;
+
+		$result = $this->api("/?command=report", json_encode($a));
+		$result = json_decode($result ?? "");
+
+		if (isset($result["status"]) and $result["status"] == "ok")
+			return true;
+
+		return false;
+	}
+
+	function ping()
+	{
+		$pong = $this->api("/?command=ping");
+		$result = json_decode($pong ?? "");
+		if (isset($result["status"]) and $result["status"] == "ok")
+			return true;
+
+		return false;
+	}
+
+	function cmd($command, $args = none)
+	{
+		if ($args)
+			$result = $this->api("/?command=$command", json_encode($args));
+		else
+			$result = $this->api("/?command=$command");
+		return json_decode($result ?? "");
+	}
+}
+
+class WforcedUser
+{
+	$secret = "badsecret";
+	$hashmech = "sha256";
+
+	$login = "";
+	$pwhash = "";
+	$remote = "";
+	$attrs = [];
+
+	constructor($username, $password, $ip, $attrs = [], $trunclen = -1)
+	{
+		$this->login = $username;
+		$this->pwhash = $this->hashpwd($username, $password, $trunclen);
+		$this->remote = $ip;
+		$this->attrs = $attrs;
+	}
+
+	function hashpwd($username, $password, $trunclen = -1)
+	{
+		$pw = $this->secret.$username."\x00".$password;
+		switch ($this->hashmech) {
+			case "sha1":
+				$hash = sha1($pw);
+				break;
+			case "sha256":
+				$hash = sha2($pw, 256);
+				break;
+			case "sha512":
+				$hash = sha2($pw, 512);
+				break;
+			case "md5":
+				$hash = md5($pw);
+				break;
+			default:
+				return none;
+		}
+		if ($trunclen > 0)
+			$hash = $this->truncate($hash, $trunclen);
+		return $hash;
+	}
+
+	private function truncate($hash, $bits)
+	{
+		$hash = pack("H*", $hash);
+		$bytes = round($bits / 8);
+		$bits = $bits % 8;
+		$chr = unpack("C*", $hash[0:$bytes]);
+		if ($bits > 0) {
+			for ($i = $bytes - 1; $i > 0; $i--) {
+				$chr[$i] = ($chr[$i] >> (8 - $bits)) + (($chr[$i - 1] & (0xff >> ($bits))) << $bits);
+			}
+			$chr[0] = $chr[0] >> (8 - $bits);
+		}
+		return unpack("H*", pack("C*", ...$chr))[0];
+	}
+}
